@@ -219,7 +219,17 @@ correlation exists only when we dialed). Non-fatal (runs after connect). **Buys:
 anchor for every directly-connected peer + an accurate tripwire (a naive growth counter
 false-positives on every legitimate rotation — why detection-only is insufficient).
 
-**Phase 2 — signed identity entries. Size M. The core.**
+**Phase 2 — ✅ SHIPPED 2026-07-22 (signed proofs — prevention).** New sibling KV
+`sys/identity-proof/{V}` = `signer_key(32)‖sig(64)` over the identity history; a node signs its own
+entry on publish/rotation (rotation signs with the *prior* key, pre-cutover, so peers chain trust).
+On merge, `validate_and_merge_identity` accepts a key only if the proof is signed by a key already
+trusted for V (CA anchor / prior key) or, for an unknown V, TOFU-accepts a self-signed first entry;
+a proof signed by an **untrusted** key is **rejected** (poisoning) + counted; no proof falls back to
+rollout tolerance (Phase 3 tightens). Gate: `test_identity_proof_rejects_poisoning_accepts_signed`
+(untrusted-signed overwrite rejected; prior-key-signed rotation accepted) + the 1b test (stale-proof
+overwrite now rejected). No wire change (additive sibling key; old nodes ignore it).
+
+**Phase 2 (design's original framing) — signed identity entries. Size M. The core.**
 Proof goes in a **sibling** key `sys/identity-proof/{V}` (not in-band — `parse_identity_keys`
 requires `len % 32 == 0`, so a 97-byte trailer would break old readers). New nodes accept a key from
 `sys/identity/{V}` only with a valid matching proof signed by (a) V's anchored CA key, (b) a key

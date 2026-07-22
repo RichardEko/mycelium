@@ -3288,6 +3288,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cert_dir);
     }
 
+    /// Identity-auth Phase 2 (SOC 2 WS-E): signed-proof **prevention**. Poisoning — a
+    /// `sys/identity/{V}` overwrite whose proof is signed by an untrusted key — must be
+    /// **rejected** (the foreign key never enters `peer_keys[V]`), while a legitimate self-signed
+    /// entry is accepted. Single-node: drive the merge helper directly against a controlled store.
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn test_identity_proof_rejects_poisoning_accepts_signed() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let anchor_keys: papaya::HashMap<NodeId, std::collections::HashSet<[u8; 32]>> =
+            papaya::HashMap::new();
+        let peer_keys: papaya::HashMap<NodeId, Vec<[u8; 32]>> = papaya::HashMap::new();
+        let conflicts = std::sync::atomic::AtomicU64::new(0);
+        let victim = NodeId::new("127.0.0.1", 7001).unwrap();
+
+        // V's real key. Anchor it (as Phase 1b would on a live connection).
+        let v_sk = SigningKey::from_bytes(&[7u8; 32]);
+        let v_key = v_sk.verifying_key().to_bytes();
+        anchor_keys.pin().insert(victim.clone(), std::collections::HashSet::from([v_key]));
+
+        // ── Poisoning: attacker M writes sys/identity/{V} = v_key‖m_key + a proof signed by M's
+        //    own key (NOT trusted for V). Must be rejected — m_key must not enter peer_keys[V].
+        let m_sk = SigningKey::from_bytes(&[66u8; 32]);
+        let m_key = m_sk.verifying_key().to_bytes();
+        let mut history = v_key.to_vec();
+        history.extend_from_slice(&m_key);
+        let m_sig = m_sk.sign(&history).to_bytes();
+        let bad_proof = crate::agent::helpers::encode_identity_proof(&m_key, &m_sig);
+        let kv_keys = [v_key, m_key];
+        crate::agent::helpers::validate_and_merge_identity(
+            &peer_keys, &anchor_keys, &conflicts, &victim, &history, &kv_keys, Some(&bad_proof));
+        assert!(!peer_keys.pin().get(&victim).map(|v| v.contains(&m_key)).unwrap_or(false),
+                "poisoning rejected: M's key must NOT be trusted for V");
+        assert_eq!(conflicts.load(std::sync::atomic::Ordering::Relaxed), 1, "conflict counted");
+
+        // ── Legitimate: V rotates, history = v2‖v_key, proof signed by the PRIOR (trusted) key.
+        //    Must be accepted — v2 enters peer_keys[V].
+        let v2_sk = SigningKey::from_bytes(&[8u8; 32]);
+        let v2_key = v2_sk.verifying_key().to_bytes();
+        let mut hist2 = v2_key.to_vec();
+        hist2.extend_from_slice(&v_key);
+        let good_sig = v_sk.sign(&hist2).to_bytes();       // signed by the prior key
+        let good_proof = crate::agent::helpers::encode_identity_proof(&v_key, &good_sig);
+        crate::agent::helpers::validate_and_merge_identity(
+            &peer_keys, &anchor_keys, &conflicts, &victim, &hist2, &[v2_key, v_key], Some(&good_proof));
+        assert!(peer_keys.pin().get(&victim).unwrap().contains(&v2_key),
+                "legitimate rotation chained by the prior key is accepted");
+    }
+
     /// Identity-auth Phase 1b (SOC 2 WS-E): a directly-connected TLS peer's CA-validated
     /// key is harvested from its cert into an authenticated anchor; a `sys/identity` KV entry
     /// introducing a *different* key then trips the conflict counter (the poisoning signal).

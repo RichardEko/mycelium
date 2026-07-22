@@ -151,8 +151,14 @@ impl GossipAgent {
                     let existing = kv_get(&self.task_ctx, &id_key)
                         .map(|b| super::helpers::parse_identity_keys(&b))
                         .unwrap_or_default();
-                    let value = Bytes::from(super::helpers::encode_identity_history(vk, &existing));
-                    let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()), value);
+                    let history = super::helpers::encode_identity_history(vk, &existing);
+                    let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()),
+                                   Bytes::from(history.clone()));
+                    // identity-auth Phase 2: publish a signed proof (signed by the current key)
+                    // so peers can authenticate this entry against the CA anchor / a trusted key.
+                    let proof = super::helpers::sign_identity_proof(&arc_tls, &history);
+                    let proof_key = format!("{}{}", kv_ns::IDENTITY_PROOF, self.node_id);
+                    let _ = kv_set(&self.task_ctx, Arc::from(proof_key.as_str()), Bytes::from(proof));
                     let _ = self.task_ctx.tls.set(arc_tls);
                     // identity-auth Phase 1b: install the anchor sink so the outbound writer
                     // records each directly-connected peer's CA-validated key into the anchor
@@ -529,10 +535,11 @@ impl GossipAgent {
             // 32 bytes = one key, 64 = current‖previous (rotation window).
             let keys = super::helpers::parse_identity_keys(&bytes);
             if !keys.is_empty() {
-                super::helpers::flag_identity_anchor_conflict(
-                    &self.task_ctx.peer_anchor_keys, &self.task_ctx.identity_anchor_conflicts,
-                    &node_id, &keys);
-                super::helpers::merge_peer_keys(&self.task_ctx.peer_keys, &node_id, &keys);
+                let proof = kv_get(&self.task_ctx, &format!("{}{}", kv_ns::IDENTITY_PROOF, node_id));
+                super::helpers::validate_and_merge_identity(
+                    &self.task_ctx.peer_keys, &self.task_ctx.peer_anchor_keys,
+                    &self.task_ctx.identity_anchor_conflicts,
+                    &node_id, &bytes, &keys, proof.as_deref());
             }
         }
     }
@@ -567,9 +574,13 @@ impl GossipAgent {
                         Some(b) => {
                             let keys = super::helpers::parse_identity_keys(b);
                             if !keys.is_empty() {
-                                super::helpers::flag_identity_anchor_conflict(
-                                    &anchor_keys, &conflicts, &node_id, &keys);
-                                super::helpers::merge_peer_keys(&peer_keys, &node_id, &keys);
+                                // Read the sibling proof from the same store snapshot (Phase 2).
+                                let proof = store_guard
+                                    .get(format!("{}{}", kv_ns::IDENTITY_PROOF, node_id).as_str())
+                                    .and_then(|e| e.data.clone());
+                                super::helpers::validate_and_merge_identity(
+                                    &peer_keys, &anchor_keys, &conflicts,
+                                    &node_id, b, &keys, proof.as_deref());
                             }
                         }
                         None => { peer_keys.pin().remove(&node_id); }

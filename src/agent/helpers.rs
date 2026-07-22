@@ -293,6 +293,102 @@ pub(crate) fn flag_identity_anchor_conflict(
     }
 }
 
+// ── Identity Phase 2: signed proofs (prevention) ────────────────────────────
+//
+// `sys/identity-proof/{V}` = signer_key(32) ‖ signature(64) over the `sys/identity/{V}` history
+// bytes. A node accepts an identity entry only if its proof is signed by a key already trusted
+// for V (CA anchor from Phase 1b, or a prior valid key — rotation chaining), or, for a
+// never-before-seen V, TOFU-accepts a self-signed first entry. No proof ⇒ rollout tolerance
+// (old unsigned nodes still establish; Phase 3 tightens that). Signed by an *untrusted* key ⇒
+// rejected — the poisoning case.
+
+/// Encode a proof value: `signer_key(32) ‖ signature(64)` = 96 bytes.
+#[cfg(feature = "tls")]
+pub(crate) fn encode_identity_proof(signer_key: &[u8; 32], sig: &[u8; 64]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(96);
+    v.extend_from_slice(signer_key);
+    v.extend_from_slice(sig);
+    v
+}
+
+/// Parse a 96-byte proof value into `(signer_key, signature)`.
+#[cfg(feature = "tls")]
+pub(crate) fn parse_identity_proof(bytes: &[u8]) -> Option<([u8; 32], [u8; 64])> {
+    if bytes.len() != 96 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes[..32]);
+    let mut sig = [0u8; 64];
+    sig.copy_from_slice(&bytes[32..96]);
+    Some((key, sig))
+}
+
+/// Sign a node's own identity `history` bytes with its current key, producing the proof value
+/// to publish at `sys/identity-proof/{self}`. At startup the current key is the node's initial
+/// key (self-signed → TOFU/anchor); during rotation this runs *before* cutover so it signs with
+/// the **prior** key (which peers already trust → chains the new key in).
+#[cfg(feature = "tls")]
+pub(crate) fn sign_identity_proof(tls: &mycelium_core::tls::NodeTls, history: &[u8]) -> Vec<u8> {
+    let sk = tls.signing_key();
+    let signer = sk.verifying_key().to_bytes();
+    let sig = crate::tls::sign_bytes(&sk, history);
+    encode_identity_proof(&signer, &sig)
+}
+
+/// Validate a peer `node`'s identity entry against its (optional) proof, and merge its keys into
+/// `peer_keys` only if authenticated (identity-auth Phase 2). See the module comment for the rule
+/// table. Rejection increments `conflict_counter` + warns; no proof falls back to the Phase-1b
+/// accept-and-flag path (rollout tolerance).
+#[cfg(feature = "tls")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_and_merge_identity(
+    peer_keys: &papaya::HashMap<crate::node_id::NodeId, Vec<[u8; 32]>>,
+    anchor_keys: &papaya::HashMap<crate::node_id::NodeId, std::collections::HashSet<[u8; 32]>>,
+    conflict_counter: &std::sync::atomic::AtomicU64,
+    node: &crate::node_id::NodeId,
+    history_bytes: &[u8],
+    kv_keys: &[[u8; 32]],
+    proof: Option<&[u8]>,
+) {
+    use std::sync::atomic::Ordering;
+    let Some((signer, sig)) = proof.and_then(parse_identity_proof) else {
+        // No proof: rollout tolerance for old unsigned writers. Keep the Phase-1b detection
+        // tripwire, then accept (Phase 3 will reject unsigned entries outright).
+        flag_identity_anchor_conflict(anchor_keys, conflict_counter, node, kv_keys);
+        merge_peer_keys(peer_keys, node, kv_keys);
+        return;
+    };
+
+    let sig_ok = crate::tls::verify_bytes(&signer, history_bytes, &sig);
+    let anchor = anchor_keys.pin().get(node).cloned().unwrap_or_default();
+    let current = peer_keys.pin().get(node).cloned().unwrap_or_default();
+    let established = !anchor.is_empty() || !current.is_empty();
+    let signer_trusted = anchor.contains(&signer) || current.contains(&signer);
+
+    let accept = if established {
+        // A key may enter an established/anchored set only via a proof signed by a key already
+        // trusted for V — a legitimate rotation chains through the prior key. An overwrite signed
+        // by any other key (the poisoning case) fails here.
+        sig_ok && signer_trusted
+    } else {
+        // TOFU first-sighting (V unknown, never connected): accept a self-signed entry — the
+        // signer must be one of the keys in its own published history.
+        sig_ok && kv_keys.contains(&signer)
+    };
+
+    if accept {
+        merge_peer_keys(peer_keys, node, kv_keys);
+    } else {
+        conflict_counter.fetch_add(1, Ordering::Relaxed);
+        tracing::warn!(
+            node = %node,
+            "rejected sys/identity: proof not chained to a trusted key for this peer \
+             (identity poisoning signal — key NOT added to peer_keys)"
+        );
+    }
+}
+
 /// All verifying keys known for `node`: the retained set in `peer_keys`, plus
 /// this node's own current key when `node` is self (covers the gap before the
 /// node's own `sys/identity` write has cycled back through the watcher). Used by

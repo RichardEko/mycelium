@@ -71,8 +71,13 @@ audit 2026-07-15 pass 3).
 >   peer's CA-validated key into `peer_anchor_keys` (on `CoreCtx`) + `peer_keys`, and a
 >   `sys/identity` KV key differing from the anchor trips `identity_anchor_conflicts` (`/stats`).
 >   Detection + an authenticated anchor for connected peers; KV overwrites are **not yet rejected**.
-> - **Phase 2 (pending):** signed `sys/identity-proof/{V}` entries chained to the anchor/prior key
->   → **prevention** (reject an overwrite not signed by a key already trusted for V).
+> - **Phase 2 (shipped 2026-07-22):** signed `sys/identity-proof/{V}` = `signer_key‖sig` over the
+>   identity history; a node signs its own entry on publish/rotation (rotation signs with the
+>   *prior* key so peers chain trust). On merge (`helpers::validate_and_merge_identity`), a key
+>   enters `peer_keys` only if the proof is signed by a key already trusted for V (anchor/prior) or,
+>   for an unknown V, TOFU-accepts a self-signed first entry. A proof signed by an **untrusted** key
+>   is **rejected** — the poisoning vector is closed for any connected/established peer. No proof ⇒
+>   rollout tolerance (Phase 3 tightens).
 > - **Phase 3 (pending, wire-v13-gated):** reject unsigned identity entries entirely.
 >
 > Full design: [`docs/design/identity-authentication.md`](../../design/identity-authentication.md).

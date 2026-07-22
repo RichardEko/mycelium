@@ -1068,8 +1068,16 @@ impl GossipAgent {
             .get(&id_key)
             .map(|b| helpers::parse_identity_keys(&b))
             .unwrap_or_default();
-        let value = helpers::encode_identity_history(new_vk, &existing);
-        let _ = self.kv().set(id_key, Bytes::from(value));
+        let history = helpers::encode_identity_history(new_vk, &existing);
+        let _ = self.kv().set(id_key, Bytes::from(history.clone()));
+        // identity-auth Phase 2: sign the new history with the CURRENT (pre-cutover = prior)
+        // key — cutover is step 4 below — so peers that already trust the prior key chain trust
+        // to the new key and accept it; a poisoner (no prior-key proof) is rejected.
+        if let Some(t) = self.task_ctx.tls.get() {
+            let proof = helpers::sign_identity_proof(t, &history);
+            let proof_key = format!("sys/identity-proof/{}", self.node_id);
+            let _ = self.kv().set(proof_key, Bytes::from(proof));
+        }
 
         // 3. Let it propagate.
         tokio::time::sleep(propagation).await;

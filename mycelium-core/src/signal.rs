@@ -885,6 +885,13 @@ pub mod kv_ns {
     /// signed consensus messages when a mTLS cert extract is not yet available.
     pub const IDENTITY: &str = "sys/identity/";
 
+    /// Signed-identity proof sibling of [`IDENTITY`] (identity-auth Phase 2): value is
+    /// `signer_key(32) ‖ signature(64)` over the `sys/identity/{node}` history bytes. A new node
+    /// accepts an identity entry into `peer_keys` only if a matching proof is chained to a key it
+    /// already trusts for that node (CA anchor or a prior valid key); old nodes ignore this key.
+    /// Deliberately not a `sys/identity/` sub-prefix so an `IDENTITY` prefix scan never sees it.
+    pub const IDENTITY_PROOF: &str = "sys/identity-proof/";
+
     /// Persistent quorum evidence namespace (library-internal — do not write from application code).
     ///
     /// Key: `sys/quorum/{kind}/{sender_node_id}`. Value: 8-byte little-endian Unix millisecond
