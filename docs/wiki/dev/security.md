@@ -78,6 +78,11 @@ audit 2026-07-15 pass 3).
 >   for an unknown V, TOFU-accepts a self-signed first entry. A proof signed by an **untrusted** key
 >   is **rejected** — the poisoning vector is closed for any connected/established peer. No proof ⇒
 >   rollout tolerance (Phase 3 tightens).
-> - **Phase 3 (pending, wire-v13-gated):** reject unsigned identity entries entirely.
+> - **Phase 3 (shipped 2026-07-22):** config flag `require_identity_proofs` (default off) — when set,
+>   an identity entry *without* a valid proof is rejected outright, closing the "mimic a pre-upgrade
+>   node" residual. Gated by a **config flag, not a wire bump** — Phase 3 changes no frame format
+>   (proofs gossip as ordinary Data frames), so a `WIRE_VERSION` bump would gate nothing; the
+>   two-release rollout discipline (enable only after the fleet fully writes proofs) is documented
+>   like a `PREV_WIRE_VERSION` window in [cert-rotation](../../operations/cert-rotation.md).
 >
 > Full design: [`docs/design/identity-authentication.md`](../../design/identity-authentication.md).

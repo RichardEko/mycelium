@@ -790,6 +790,17 @@ pub struct GossipConfig {
     #[serde(default)]
     pub gateway_scoped_tokens: Vec<GatewayToken>,
 
+    /// **Require signed identity proofs** (identity-auth Phase 3). When `true`, a `sys/identity/{V}`
+    /// entry **without** a valid `sys/identity-proof/{V}` is **rejected** (not merged into
+    /// `peer_keys`) — closing the last poisoning residual (an unsigned entry mimicking a pre-Phase-2
+    /// node). `false` (default) keeps rollout tolerance: unsigned entries are accepted (+ the
+    /// Phase-1b tripwire). **Enable only after every node in the cluster runs the Phase-2 release**
+    /// (writes proofs) — like a `PREV_WIRE_VERSION` window, flipping it before full rollout would
+    /// reject legitimate pre-upgrade nodes. Set via `GOSSIP_REQUIRE_IDENTITY_PROOFS`.
+    /// See `docs/operations/cert-rotation.md`.
+    #[serde(default)]
+    pub require_identity_proofs: bool,
+
     /// Outbound egress allow-policy (WS3). Default: empty = allow all. Set
     /// `allow_hosts` to constrain which external hosts the substrate may reach
     /// (enforced at the MCP client bridge). A node-local posture, not a coordinator.
@@ -880,6 +891,7 @@ impl Default for GossipConfig {
             emergent_detectors_enabled:    false,
             gateway_auth_token:            None,
             gateway_scoped_tokens:         Vec::new(),
+            require_identity_proofs:       false,
             egress:                        EgressPolicy::default(),
             #[cfg(feature = "compliance")]
             oidc:                          None,
@@ -1377,6 +1389,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_EMERGENT_DETECTORS") {
             self.emergent_detectors_enabled = matches!(v.as_str(), "1" | "true" | "TRUE" | "yes");
+        }
+        if let Ok(v) = env::var("GOSSIP_REQUIRE_IDENTITY_PROOFS") {
+            self.require_identity_proofs = matches!(v.as_str(), "1" | "true" | "TRUE" | "yes");
         }
         if let Ok(v) = env::var("GOSSIP_LOCALITY_PATH") {
             self.locality_path = v

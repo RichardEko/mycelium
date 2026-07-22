@@ -350,11 +350,24 @@ pub(crate) fn validate_and_merge_identity(
     history_bytes: &[u8],
     kv_keys: &[[u8; 32]],
     proof: Option<&[u8]>,
+    require_proofs: bool,
 ) {
     use std::sync::atomic::Ordering;
     let Some((signer, sig)) = proof.and_then(parse_identity_proof) else {
-        // No proof: rollout tolerance for old unsigned writers. Keep the Phase-1b detection
-        // tripwire, then accept (Phase 3 will reject unsigned entries outright).
+        // No proof.
+        if require_proofs {
+            // Phase 3 (require_identity_proofs): reject an unsigned entry outright — closes the
+            // "mimic a pre-Phase-2 node" residual. Safe only once the whole fleet writes proofs;
+            // a late-arriving proof re-validates via the identity watcher (which also watches the
+            // proof prefix). The key is NOT merged.
+            conflict_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                node = %node,
+                "rejected sys/identity: no proof and require_identity_proofs is set (Phase 3)"
+            );
+            return;
+        }
+        // Rollout tolerance (default): keep the Phase-1b detection tripwire, then accept.
         flag_identity_anchor_conflict(anchor_keys, conflict_counter, node, kv_keys);
         merge_peer_keys(peer_keys, node, kv_keys);
         return;

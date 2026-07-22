@@ -240,7 +240,17 @@ Touchpoints: `helpers.rs` (proof encode/decode/verify + merge gate), `lifecycle.
 `src/lib.rs` KV table adds `sys/identity-proof/`. **Buys:** an overwrite is rejected unless signed by
 an already-trusted key.
 
-**Phase 3 — reject unauthenticated. Size S code / L coordination. WIRE-VERSION-GATED (v13).**
+**Phase 3 — ✅ SHIPPED 2026-07-22 (reject unauthenticated).** Gated by a **config flag**
+`require_identity_proofs` (default false; `GOSSIP_REQUIRE_IDENTITY_PROOFS`), **not a WIRE_VERSION
+bump** — implementation confirmed Phase 3 changes no frame format (proofs gossip as ordinary Data
+frames), so a v13 bump would gate nothing and spuriously open a rolling-upgrade window. When set, an
+identity entry with no valid proof is rejected outright (the "mimic a pre-Phase-2 node" residual).
+The identity watcher now also watches the proof prefix so a late-arriving proof re-validates (no
+transient partition). Two-release rollout documented like a `PREV_WIRE_VERSION` window
+([cert-rotation](../operations/cert-rotation.md)). Gate:
+`test_require_identity_proofs_rejects_unsigned` (flag off → accepted; flag on → rejected + counted).
+
+**Phase 3 (design's original framing) — reject unauthenticated. WIRE-VERSION-GATED (v13).**
 New nodes reject any `sys/identity/{V}` lacking a valid proof. **Two-release migration**, gated
 exactly like `PREV_WIRE_VERSION`: R1 = write proofs + accept-both (Phase 2 ships); R2 = require
 proofs (Phase 3), only after the fleet is known to write proofs — else new nodes partition by

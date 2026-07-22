@@ -539,7 +539,8 @@ impl GossipAgent {
                 super::helpers::validate_and_merge_identity(
                     &self.task_ctx.peer_keys, &self.task_ctx.peer_anchor_keys,
                     &self.task_ctx.identity_anchor_conflicts,
-                    &node_id, &bytes, &keys, proof.as_deref());
+                    &node_id, &bytes, &keys, proof.as_deref(),
+                    self.task_ctx.config.require_identity_proofs);
             }
         }
     }
@@ -550,11 +551,17 @@ impl GossipAgent {
     /// also caught; the prefix is small (one entry per cluster node).
     #[cfg(feature = "tls")]
     fn start_identity_watcher(&self) {
-        let mut rx      = kv_subscribe_prefix(&self.task_ctx, Arc::<str>::from(kv_ns::IDENTITY));
+        // Subscribe to the broader `sys/identity` prefix (no trailing slash) so BOTH
+        // `sys/identity/` and `sys/identity-proof/` changes re-trigger the re-scan — a proof
+        // arriving after its identity then re-validates the entry (matters under Phase 3, where an
+        // unsigned entry is rejected until its proof is seen). The scan below still filters to
+        // `sys/identity/` entries.
+        let mut rx      = kv_subscribe_prefix(&self.task_ctx, Arc::<str>::from("sys/identity"));
         let shutdown_rx = self.shutdown_tx.subscribe();
         let peer_keys   = Arc::clone(&self.task_ctx.peer_keys);
         let anchor_keys = Arc::clone(&self.task_ctx.peer_anchor_keys);
         let conflicts   = Arc::clone(&self.task_ctx.identity_anchor_conflicts);
+        let require_proofs = self.task_ctx.config.require_identity_proofs;
         let kv_state    = Arc::clone(&self.kv_state);
         self.spawn_task(async move {
             let mut shutdown_rx = shutdown_rx;
@@ -580,7 +587,7 @@ impl GossipAgent {
                                     .and_then(|e| e.data.clone());
                                 super::helpers::validate_and_merge_identity(
                                     &peer_keys, &anchor_keys, &conflicts,
-                                    &node_id, b, &keys, proof.as_deref());
+                                    &node_id, b, &keys, proof.as_deref(), require_proofs);
                             }
                         }
                         None => { peer_keys.pin().remove(&node_id); }

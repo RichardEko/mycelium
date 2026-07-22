@@ -80,6 +80,26 @@ its own keys — the coordinator-free trade-off. A **fully-compromised or offlin
 be force-revoked by a fleet operator without a separate operator-authority mechanism (not yet
 provided). Re-issuing the cluster CA remains the heavier fallback for that case.
 
+### Authenticated identity — enabling proof enforcement (identity-auth Phase 2/3)
+
+Every TLS node now publishes a signed `sys/identity-proof/{self}` alongside its identity, and
+peers **reject** an identity overwrite whose proof doesn't chain to a key they already trust — so
+the key-poisoning vector (a forged verifying key injected via `sys/identity`) is closed for any
+connected/established peer. Rejections increment `identity_anchor_conflicts` on `/stats`.
+
+One residual remains by default: an *unsigned* identity entry (mimicking a pre-upgrade node) is
+still **tolerated** during rollout. To close it, set **`require_identity_proofs`** (or
+`GOSSIP_REQUIRE_IDENTITY_PROOFS=1`) — then unsigned entries are rejected outright.
+
+**Two-release rollout (like a `PREV_WIRE_VERSION` window — do not skip):**
+1. **R1** — deploy the Phase-2 release fleet-wide (every node writes proofs). Leave
+   `require_identity_proofs = false`. Confirm rollout is complete (no node predates the release).
+2. **R2** — only then set `require_identity_proofs = true`. Flipping it before every node writes
+   proofs would reject legitimate pre-upgrade nodes and partition them out.
+
+A proof that gossips in *after* its identity re-validates automatically (the identity watcher also
+watches the proof prefix), so transient ordering never permanently rejects a legitimate node.
+
 ---
 
 ## 3. Verify a rotation went cleanly

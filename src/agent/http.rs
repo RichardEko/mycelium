@@ -3317,7 +3317,7 @@ mod tests {
         let bad_proof = crate::agent::helpers::encode_identity_proof(&m_key, &m_sig);
         let kv_keys = [v_key, m_key];
         crate::agent::helpers::validate_and_merge_identity(
-            &peer_keys, &anchor_keys, &conflicts, &victim, &history, &kv_keys, Some(&bad_proof));
+            &peer_keys, &anchor_keys, &conflicts, &victim, &history, &kv_keys, Some(&bad_proof), false);
         assert!(!peer_keys.pin().get(&victim).map(|v| v.contains(&m_key)).unwrap_or(false),
                 "poisoning rejected: M's key must NOT be trusted for V");
         assert_eq!(conflicts.load(std::sync::atomic::Ordering::Relaxed), 1, "conflict counted");
@@ -3331,9 +3331,39 @@ mod tests {
         let good_sig = v_sk.sign(&hist2).to_bytes();       // signed by the prior key
         let good_proof = crate::agent::helpers::encode_identity_proof(&v_key, &good_sig);
         crate::agent::helpers::validate_and_merge_identity(
-            &peer_keys, &anchor_keys, &conflicts, &victim, &hist2, &[v2_key, v_key], Some(&good_proof));
+            &peer_keys, &anchor_keys, &conflicts, &victim, &hist2, &[v2_key, v_key], Some(&good_proof), false);
         assert!(peer_keys.pin().get(&victim).unwrap().contains(&v2_key),
                 "legitimate rotation chained by the prior key is accepted");
+    }
+
+    /// Identity-auth Phase 3 (SOC 2 WS-E): with `require_identity_proofs`, an **unsigned**
+    /// `sys/identity` entry (mimicking a pre-Phase-2 node) is **rejected** — the last poisoning
+    /// residual — whereas the same entry is tolerated when the flag is off (rollout).
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn test_require_identity_proofs_rejects_unsigned() {
+        use ed25519_dalek::SigningKey;
+        let anchor_keys: papaya::HashMap<NodeId, std::collections::HashSet<[u8; 32]>> =
+            papaya::HashMap::new();
+        let node = NodeId::new("127.0.0.1", 7002).unwrap();
+        let k = SigningKey::from_bytes(&[9u8; 32]).verifying_key().to_bytes();
+        let history = k.to_vec();
+
+        // Flag OFF (default, rollout): unsigned entry accepted.
+        let pk_off: papaya::HashMap<NodeId, Vec<[u8; 32]>> = papaya::HashMap::new();
+        let c_off = std::sync::atomic::AtomicU64::new(0);
+        crate::agent::helpers::validate_and_merge_identity(
+            &pk_off, &anchor_keys, &c_off, &node, &history, &[k], None, false);
+        assert!(pk_off.pin().get(&node).is_some_and(|v| v.contains(&k)),
+                "flag off: unsigned entry accepted (rollout tolerance)");
+
+        // Flag ON (Phase 3): the same unsigned entry rejected + counted.
+        let pk_on: papaya::HashMap<NodeId, Vec<[u8; 32]>> = papaya::HashMap::new();
+        let c_on = std::sync::atomic::AtomicU64::new(0);
+        crate::agent::helpers::validate_and_merge_identity(
+            &pk_on, &anchor_keys, &c_on, &node, &history, &[k], None, true);
+        assert!(pk_on.pin().get(&node).is_none(), "flag on: unsigned entry rejected");
+        assert_eq!(c_on.load(std::sync::atomic::Ordering::Relaxed), 1, "rejection counted");
     }
 
     /// Identity-auth Phase 1b (SOC 2 WS-E): a directly-connected TLS peer's CA-validated
