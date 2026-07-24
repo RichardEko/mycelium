@@ -35,6 +35,24 @@ Governance surface: `POST /gateway/govern/{timing,tuning,membership}` + `GET /ga
 (deny-by-default scopes, WS2-audited) — see
 [management-as-intent](../domain/theory/management-as-intent.md) for the model.
 
+**Identity / key revocation (SOC 2 WS-B, `compliance`):** `POST /gateway/identity/revoke` (scope
+`identity:write`), body `{"revoked_key":"<64 hex>","reason":"…"}` — the operator compromise-
+remediation trigger. Revocations are validated + excluded on all verify paths incl. consensus
+(`src/agent/revocation.rs`); rotate then revoke, or `rotate_identity_on_compromise`. Runbook:
+[cert-rotation](../../operations/cert-rotation.md).
+
+**Native gateway TLS (WS-A):** the gateway is plaintext by default (the "no auth by design" edge
+above is the *default*, not a ceiling — set `gateway_scoped_tokens`/OIDC for auth). Set
+`GossipConfig::gateway_tls` (`GatewayTlsConfig`) for native server-side HTTPS so bearer tokens/JWTs
+are never cleartext — reuse the node cert or supply a hostname cert.
+[gateway-tls](../../operations/gateway-tls.md).
+
+**Authenticated identity (WS-E):** every TLS node publishes a signed `sys/identity-proof/{self}`;
+peers reject an identity overwrite whose proof doesn't chain to a trusted key (`identity_anchor_conflicts`
+counts rejections, on `/stats`). `require_identity_proofs` (`GOSSIP_REQUIRE_IDENTITY_PROOFS`, default
+off) also rejects *unsigned* entries — enable only after full fleet rollout (two-release discipline,
+[cert-rotation](../../operations/cert-rotation.md)).
+
 **Bridged capability adverts need a lease.** `POST /gateway/capability/advertise` spawns the
 refresh loop *in the node*, so a bridge client's advert survives the client's crash and never
 evaporates (the 2026-07-20 scraper-fleet "stale w15 advert" finding: provider liveness decoupled

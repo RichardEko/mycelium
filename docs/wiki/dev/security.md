@@ -47,6 +47,12 @@ their broker IS the crown jewel). Two opt-in controls:
 - **`EgressPolicy { allow_hosts }`** — enforced at every outbound HTTP path the substrate
   chooses (MCP bridge, capability probes, LLM backends, SkillRunner). Fail-closed on
   unparseable hosts.
+- **Crypto-shred erasure (WS-F, `tls`)** — `SubjectKeyRegistry` (`mycelium-core/src/erasure.rs`):
+  per-subject DEK envelope encryption; GDPR erase = destroy the DEK → all ciphertext dead. The
+  per-subject layer *above* the KV value, composing with `DataAtRestCipher`. Physical deletion isn't
+  guaranteeable in a gossip+WAL mesh, so key-destruction is the mechanism; production custody is a
+  KMS. Design: [`design/data-lifecycle-and-erasure.md`](../../design/data-lifecycle-and-erasure.md);
+  runbook [`operations/data-erasure.md`](../../operations/data-erasure.md).
 
 ## WS5 — hot cert/identity rotation (`tls`)
 

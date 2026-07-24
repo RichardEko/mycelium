@@ -1,6 +1,13 @@
 # Authenticating `sys/identity` — closing the key-poisoning vector
 
-**Status:** Design (2026-07-15). Not yet implemented. Tracks the residual from the
+**Status:** ✅ **SHIPPED (2026-07-22, SOC 2 WS-E).** All phases landed and CI-verified — 1a
+(extraction primitive), 1b (CA-anchor harvest + `identity_anchor_conflicts` tripwire), 2 (signed
+`sys/identity-proof/` — prevention), 3 (`require_identity_proofs` config flag — reject unsigned;
+**not** a wire bump, since Phase 3 changes no frame format). Two implementation deviations from this
+design, both recorded in the wiki `.log` and better than the original: 1b hangs the anchor recorder
+off `NodeTls` (reusing the already-threaded `tls` handle) instead of threading a callback through 10
+call sites; Phase 3 uses a config flag rather than a `WIRE_VERSION` bump. Original design below
+(2026-07-15). Tracks the residual from the
 2026-07-15 audit **pass 3** (`docs/analysis/ratings.md`, Calibration Ledger — the
 identity-poisoning finding that showed the pass-2 `signer_authorized` bind over-claimed
 insider-resistance). This is a **security trust-root** change: it must be reviewed and

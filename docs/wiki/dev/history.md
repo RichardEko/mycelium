@@ -22,6 +22,32 @@ As of 2026-06-21 all v1.x/v2.0 engineering plans were shipped. Since then, **Leg
 The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/explain`) · **diagnose**
 (`/diagnose`) — is shipped, tested, and documented for both audiences.
 
+## Post-v2.2.0: SOC 2 audit-gap closure (2026-07-22, on `main`, unreleased)
+
+The complete adopter-facing SOC 2 / pentest gap closure — plan
+[`docs/plans/soc2-audit-gap-closure.md`](../../plans/soc2-audit-gap-closure.md) (✅ complete), all
+CI-verified. Pure-library path; each workstream flips a
+[shared-responsibility-matrix](../../operations/shared-responsibility-matrix.md) cell:
+
+- **WS-A gateway TLS** — native server-side HTTPS (`GossipConfig::gateway_tls`) so bearer tokens
+  aren't cleartext; hand-rolled `tokio-rustls`+`hyper-util` acceptor (no new compiled crate).
+- **WS-B compromise remediation** — `rotate_identity_on_compromise` + `POST /gateway/identity/revoke`
+  (`identity:write`); revocation was already consulted on all verify paths incl. consensus.
+- **WS-C audit export** — pluggable `AuditSink` (SIEM/WORM) off the write path.
+- **WS-D audit retention** — signed `AuditCheckpoint` (`sys/audit-checkpoint/`) → export → prune,
+  verify-from-checkpoint.
+- **WS-E `sys/identity` authentication** — the security-critical one: 1a extraction primitive · 1b
+  CA-cert **anchor** harvest + `identity_anchor_conflicts` tripwire · 2 signed
+  `sys/identity-proof/` (**prevention** — reject an overwrite not chained to a trusted key) · 3
+  `require_identity_proofs` config flag (reject unsigned; **not** a wire bump — no frame change).
+  Closes the forged-consensus-quorum vector. Full design
+  [`design/identity-authentication.md`](../../design/identity-authentication.md).
+- **WS-F GDPR erasure** — `SubjectKeyRegistry` crypto-shred (per-subject DEK; erase = destroy key),
+  [`design/data-lifecycle-and-erasure.md`](../../design/data-lifecycle-and-erasure.md).
+- **Process fix:** `make check` now clippies the `compliance` feature (it previously went un-linted
+  locally — the local-vs-CI gap); three CI gates (compliance suite, consensus-free embed, core
+  clippy) added. New direct deps `ring`/`hyper-util`/`tower-service` were all already in-tree.
+
 ## v2.2.0 release — 2026-07-16 (tag `v2.2.0`)
 
 A hardening MINOR since v2.1.0. Wire **v12** (PREV 11) unchanged — a fully backwards-compatible
