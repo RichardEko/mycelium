@@ -19,6 +19,24 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-24 (run 13)** — diff-gated over the **SOC 2 audit-gap arc** (2026-07-22, on `main`: WS-A…F
+  — gateway TLS, audit export/checkpoint, `sys/identity` authentication 1a/1b/2/3, revocation glue,
+  crypto-shred erasure). Two moves:
+  - **New concept row — Data erasure (crypto-shred).** `SubjectKeyRegistry` (WS-F): WHY
+    `design/data-lifecycle-and-erasure.md`, WHAT/HOW·Ops `operations/data-erasure.md`. WHAT/HOW·Dev
+    were initially **Thin** (the runnable API lived only in the ops runbook + rustdoc, no Dev-addressed
+    landing) → closed by adding the control to the `09-security.md` Dev "Compliance controls" table.
+    Row lands ✓✓✓✓✓.
+  - **Security (TLS/RBAC/SSO/audit) — enriched + two `must-work-if-followed` bugs fixed.** The arc
+    added six Dev-facing controls (gateway TLS, audit sink, audit checkpoint/prune, compromise
+    remediation, `require_identity_proofs`, erasure) that `09-security.md` (the Dev chapter) named
+    **none** of — plus a stale "gateway can't be TLS'd natively" note. Fixed by a new Compliance-controls
+    table + runbook links. **And the presence-is-not-sufficiency spot-check caught two pre-existing
+    bugs in that chapter's Dev Notes** (see Calibration): a `TlsConfig { key_path: … }` example that
+    does **not compile** (the field is `key_pem`), and a false "default regenerates the key every
+    restart" claim (the default persists to `auto_cert_dir` and reloads). Both fixed; Security · HOW·Dev
+    re-verified genuinely Clear. Calibration entry appended (the 7th). All other rows carried.
+
 - **2026-07-20 (run 12)** — diff-gated. Delta since run 11: **v2.2.0** (tag only — hardening fixes,
   no landing moves), the **scrape-fleet launcher examples** (deployment utilities; cluster-name row
   re-verified: `13-cluster-topology.md`'s `apply_env_overrides()` warning is accurate and the new
@@ -175,14 +193,15 @@ closed it.
 | Membership + cluster_name | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Groups (three kinds) | ✓ | ✓ ᵀ³ | ✓ | ✓ | ✓ |
 | Legible Emergence | ✓ ᵀ³ | ✓ | ✓ ᵀ³ | ✓ | ✓ |
-| Security (TLS/RBAC/SSO/audit) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Security (TLS/RBAC/SSO/audit) | ✓ | ✓ | ✓ ᴿ¹³ | ✓ | ✓ |
+| Data erasure (crypto-shred) | ✓ | ✓ ᴿ¹³ | ✓ ᴿ¹³ | ✓ | ✓ |
 | Artifacts / library | ✓ | ✓ | ✓ ᵀ² ᴿ⁹ | ✓ | ✓ |
 | Federation / AgentFacts | ✓ | ✓ | ✓ ᵀ¹ | ✓ | ✓ |
 | Reasoning / LLM / MCP / guardrails | ✓ | ✓ | ✓ ᵀ² | ✓ | ✓ |
 | Companions | ✓ | ✓ | ✓ | ✓ | ✓ ᵀ² |
 | Rolling upgrade (wire compat) | ✓ | ✓ | ✓ | ✓ | ✓ ᴿ² |
 
-ᵀ¹ closed in Tier 1 · ᵀ² Tier 2 · ᵀ³ Tier 3 · ᴿ² closed in run 2 (2026-07-11) · ᴿ⁹ run-command fix + re-verified, run 9 (2026-07-15).
+ᵀ¹ closed in Tier 1 · ᵀ² Tier 2 · ᵀ³ Tier 3 · ᴿ² closed in run 2 (2026-07-11) · ᴿ⁹ run-command fix + re-verified, run 9 (2026-07-15) · ᴿ¹³ SOC 2 arc: Dev security chapter gained the compliance-controls table + two must-work-if-followed bug fixes; new erasure row got its Dev landing (run 13, 2026-07-24).
 
 ## What was found, and how it was closed
 
@@ -254,6 +273,16 @@ Prior `Clear` cells later found Thin/Missing — the ledger that scores this aud
 doc analogue of `ratings.md`'s calibration ledger). A cell with repeated hits deserves structural
 skepticism, not a re-asserted ✓.
 
+- **2026-07-24 — Security · HOW·Dev** was `Clear` in runs 1–12 while `09-security.md`'s Dev Notes held
+  two `must-work-if-followed` defects: a `TlsConfig { key_path: … }` example that **does not compile**
+  (the field is `key_pem`) and a false "`TlsConfig::default()` regenerates the key every restart" claim
+  (it persists to `auto_cert_dir` and reloads — so a copy-paster's identity is actually stable, and the
+  doc's stated remedy used a non-existent field). Found by **this run's presence-is-not-sufficiency
+  spot-check** opening the Dev chapter's code examples and checking field names against `TlsConfig`.
+  Root cause: prior runs verified the chapter's *prose* and endpoint curls but never compiled its Rust
+  `TlsConfig` literal against the struct. Lesson (folded into the check): the must-work-if-followed gate
+  must diff every `Config { … }` literal in a Dev doc against the actual struct fields, not just spot-check
+  env-vars/version-constants — a wrong field name is the same class of silent failure as a stale constant.
 - **2026-07-20 — Capabilities · WHAT·Dev + HOW·Dev (bridge)** were `Clear` in runs 1–11 while the
   evaporation story was **false for gateway-bridged advertisers**: `02-capabilities.md` claimed "a
   node that stops refreshing simply evaporates" and `10-language-bridges.md` said the handle "keeps

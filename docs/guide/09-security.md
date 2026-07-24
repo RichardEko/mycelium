@@ -303,22 +303,38 @@ are relevant to each control.
 
 ## Dev Notes
 
-**`tls` feature scope.** mTLS protects the gossip transport between nodes.
-It does not encrypt the HTTP management gateway or SkillRunner HTTP endpoints.
-For production deployments, put the HTTP gateway behind a TLS-terminating
-reverse proxy (nginx, Caddy).
+**`tls` feature scope.** mTLS protects the gossip transport between nodes. The HTTP management
+gateway is plaintext **by default** — either set `GossipConfig::gateway_tls` for **native
+server-side HTTPS** (so bearer tokens/JWTs aren't cleartext) or front it with a TLS-terminating
+reverse proxy (nginx, Caddy). → [operations/gateway-tls.md](../operations/gateway-tls.md).
 
-**Key persistence.** `TlsConfig::default()` generates a fresh keypair on
-every restart. This means `sys/identity/{node}` changes on every restart,
-breaking audit trail continuity. For production use, persist the keypair to
-disk and reload it:
+**Key persistence.** `TlsConfig::default()` **persists** the node key under `auto_cert_dir`
+(`./mycelium-tls/` by default) and **reloads it on restart**, so `sys/identity/{node}` is stable and
+the audit trail stays continuous — *provided that directory persists*. In an ephemeral container
+without a volume, a wiped dir regenerates the identity (breaking continuity), so mount it, or point
+at an explicit key:
 
 ```rust
 cfg.tls = Some(TlsConfig {
-    key_path: Some(PathBuf::from("/var/lib/mycelium/node.key")),
+    key_pem: Some(PathBuf::from("/var/lib/mycelium/node.key")),   // PEM PKCS8; None = auto under auto_cert_dir
     ..Default::default()
 });
 ```
+
+**Compliance controls (the SOC 2 audit-gap surface, shipped 2026-07-22).** Beyond mTLS/RBAC/audit
+above, the Dev-facing controls and their Ops runbooks:
+
+| Control | Dev API / config | Runbook |
+|---|---|---|
+| Native gateway TLS | `GossipConfig::gateway_tls` | [gateway-tls](../operations/gateway-tls.md) |
+| Audit → SIEM/WORM export | `GossipAgent::with_audit_sink` (`AuditSink`) | [audit](../operations/audit.md) |
+| Audit retention (checkpoint/prune) | `audit_checkpoint` / `audit_prune_to_checkpoint` | [audit](../operations/audit.md) |
+| Compromise remediation | `rotate_identity_on_compromise` · `POST /gateway/identity/revoke` | [cert-rotation](../operations/cert-rotation.md) |
+| Authenticated identity (reject unsigned) | `require_identity_proofs` (`GOSSIP_REQUIRE_IDENTITY_PROOFS`) | [cert-rotation](../operations/cert-rotation.md) |
+| GDPR erasure (crypto-shred) | `SubjectKeyRegistry` (`encrypt_for`/`decrypt_for`/`destroy`) | [data-erasure](../operations/data-erasure.md) |
+
+The adopter/auditor control map (what Mycelium provides vs. what you own) is the
+[shared-responsibility matrix](../operations/shared-responsibility-matrix.md).
 
 **Rolling upgrade window.** Each wire version is backward-compatible with the previous one:
 `read_frame` accepts both `WIRE_VERSION` and `PREV_WIRE_VERSION` (currently **12** and **11**
