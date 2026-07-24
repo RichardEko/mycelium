@@ -14,9 +14,12 @@ services, gateway, tls. It is a **library, not a platform** — no daemon, no co
 a cluster is emergent from network reachability (peer-exchange + CA admission — **not**
 `cluster_name`, which is a cosmetic label). v2.0 complete (all 16 milestones, 2026-06-21); v2.1.0
 2026-07-15 (`LockService`, CI-gated Docker suites, #164 lock fixes);
-**v2.2.0 released 2026-07-16** (tag `v2.2.0` — a hardening MINOR: a five-pass adversarial self-audit,
-~40 correctness fixes + an input-fuzz gate + identity-auth Phase 1a + a `/ready` semantics fix; wire
-unchanged); wire **v12** (`PREV = 11`). Scopes are **`Cluster · Group · Individual`** (all / subset / one),
+v2.2.0 2026-07-16 (five-pass adversarial self-audit, input-fuzz gate, identity-auth Phase 1a, `/ready`
+fix); **v2.3.0 released 2026-07-24** (tag `v2.3.0` — the **SOC 2 audit-gap** MINOR: gateway TLS
+(`gateway_tls`) · audit export (`AuditSink`) + retention checkpointing · `sys/identity` authentication
+(CA anchor → signed `sys/identity-proof/` → `require_identity_proofs`, default-off) · rotate+revoke ·
+GDPR crypto-shred (`SubjectKeyRegistry`) — all additive, wire unchanged; the shared-responsibility
+matrix is `docs/operations/shared-responsibility-matrix.md`); wire **v12** (`PREV = 11`). Scopes are **`Cluster · Group · Individual`** (all / subset / one),
 shared by `SignalScope` and consensus (`cluster_propose` / `group_propose`). *Renamed 2026-07-10:*
 `System` → `Cluster` (wire-compatible; `system_propose` kept as a `#[deprecated]` alias, gateway
 still accepts `"system"`); `system_stats()` is unrelated — node-local runtime state, not a scope.

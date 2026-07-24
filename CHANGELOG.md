@@ -9,6 +9,43 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-07-24
+
+Wire **v12** (PREV 11) — unchanged; a fully backwards-compatible rolling upgrade. This is the
+**SOC 2 audit-gap release**: the five gaps a pentest / SOC 2 control walkthrough surfaces in an
+adopter's audit are closed, with an adopter-facing shared-responsibility matrix as the spine
+(`docs/plans/soc2-audit-gap-closure.md`, `docs/operations/shared-responsibility-matrix.md`). Pure
+library — no daemon, no control plane; your deployment is the audited system. Additive public API
+throughout, so a minor bump. Also the release-1 (R1) step of the identity Phase-3 rollout:
+`require_identity_proofs` ships **default-off** — enable it only after the whole fleet runs this
+release.
+
+### Added
+
+- **Native gateway TLS (WS-A):** `GossipConfig::gateway_tls` (`GatewayTlsConfig`) — server-side
+  HTTPS on the gateway port (reuse the node cert or supply a hostname cert) so bearer tokens/JWTs
+  aren't cleartext. Plaintext + front-with-proxy remains the default.
+- **Audit export (WS-C):** `AuditSink` trait + `GossipAgent::with_audit_sink` — every sealed record
+  mirrored to your SIEM/WORM off the write path; the in-cluster chain stays authoritative.
+- **Audit retention (WS-D):** signed `AuditCheckpoint` (`sys/audit-checkpoint/`) +
+  `audit_checkpoint` / `audit_prune_to_checkpoint` — export then prune old records while the rest
+  still verifies (verify-from-checkpoint).
+- **Compromise remediation (WS-B):** `rotate_identity_on_compromise` + operator route
+  `POST /gateway/identity/revoke` (scope `identity:write`).
+- **`sys/identity` authentication (WS-E):** CA-cert anchor harvest + `identity_anchor_conflicts`
+  tripwire, signed `sys/identity-proof/` (reject an overwrite not chained to a trusted key), and
+  the `require_identity_proofs` flag (reject unsigned; `GOSSIP_REQUIRE_IDENTITY_PROOFS`). Closes the
+  forged-consensus-quorum vector.
+- **GDPR erasure (WS-F):** `SubjectKeyRegistry` crypto-shred helper (`mycelium::SubjectKeyRegistry`,
+  `tls`) — per-subject DEK; erase = destroy the key.
+
+### Changed
+
+- `make check` now clippies the `compliance` feature (compliance-gated code was previously
+  un-linted locally); three CI gates added (compliance suite, consensus-free embed, core clippy).
+- New direct deps `ring` (mycelium-core, `tls`), `hyper-util` + `tower-service` (`gateway`) — all
+  already present transitively, so no new compiled crate.
+
 ## [2.2.0] — 2026-07-16
 
 Wire **v12** (PREV 11) — unchanged from v2.1.0; a fully backwards-compatible rolling upgrade

@@ -2104,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -2153,7 +2153,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-agentfacts"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "axum 0.8.9",
  "base64",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-blackboard"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "axum 0.8.9",
  "base64",
@@ -2202,7 +2202,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-core"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -2260,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-tuple-space"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "axum 0.8.9",
  "base64",
@@ -2278,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-wasm-host"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2299,7 +2299,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-wiki"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "async-trait",
  "axum 0.8.9",

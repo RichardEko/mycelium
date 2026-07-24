@@ -22,9 +22,11 @@ As of 2026-06-21 all v1.x/v2.0 engineering plans were shipped. Since then, **Leg
 The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/explain`) · **diagnose**
 (`/diagnose`) — is shipped, tested, and documented for both audiences.
 
-## Post-v2.2.0: SOC 2 audit-gap closure (2026-07-22, on `main`, unreleased)
+## v2.3.0 release — 2026-07-24 (tag `v2.3.0`)
 
-The complete adopter-facing SOC 2 / pentest gap closure — plan
+Wire **v12** (PREV 11) unchanged — a fully backwards-compatible rolling upgrade; additive public API
+throughout (minor bump). Also the **R1** step of the identity Phase-3 rollout: `require_identity_proofs`
+ships default-off. The complete adopter-facing SOC 2 / pentest gap closure — plan
 [`docs/plans/soc2-audit-gap-closure.md`](../../plans/soc2-audit-gap-closure.md) (✅ complete), all
 CI-verified. Pure-library path; each workstream flips a
 [shared-responsibility-matrix](../../operations/shared-responsibility-matrix.md) cell:
