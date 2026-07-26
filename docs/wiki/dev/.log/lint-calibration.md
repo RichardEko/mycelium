@@ -127,3 +127,17 @@ Entry format:
   modules across all crates — a namespace is reserved by its *definition*, not only by an in-crate
   writer. Fixed: both rows added to `src/lib.rs` + the guide; `sys/health` / `sys/rate` / `sys/role`
   subkey rows added while there.
+- 2026-07-26: **scope gap — §1 front-door check never verified the install/dependency snippet resolves
+  to *this* crate.** `building-on-mycelium.md` §1 told adopters `mycelium = "2"` / `mycelium-core = "2"`
+  — crates.io *version* deps that resolve against an **unrelated, dormant 2019 project** of the same
+  name (`gitlab.com/matthew.bradford/myceliumdds`, 0.1.1), not this crate; a fresh `cargo add mycelium`
+  pulls the wrong code or fails. §1's front-door check verified `WIRE_VERSION`, the 8 sub-handles, the
+  feature flags, and the reserved-prefix list — but never that the **dependency line itself points at
+  this project** — so it declared the doc clean through every pass. Found by a user question about
+  publishing v2.3 to crates.io, which surfaced the name collision. Root cause is the same family as the
+  KV-namespace "reserved by *definition*, not by writer" miss (2026-07-20): a documented *fact about the
+  outside world* the check never cross-verified against reality. **Sharpening:** §1's front-door check
+  now verifies any dependency/install snippet — a bare crates.io `name = "x"` dep for a crate name this
+  project does not own on crates.io is a finding; the supported form is the `git =`/`tag =` dep. Fixed:
+  building-on §1 rewritten to git-tag deps + a why-not-crates.io note (commit 4ecc1aa); the constraint
+  now has a wiki home on `companions.md` + `history.md` (2026-07-26).

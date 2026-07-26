@@ -50,6 +50,29 @@ CI-verified. Pure-library path; each workstream flips a
   locally — the local-vs-CI gap); three CI gates (compliance suite, consensus-free embed, core
   clippy) added. New direct deps `ring`/`hyper-util`/`tower-service` were all already in-tree.
 
+## Companion re-versioning + distribution reality — 2026-07-26
+
+Not a substrate release — a correction to two things that had drifted by neglect while the substrate
+walked 2.1 → 2.3:
+
+- **Re-versioned the two v3.0 companions by actual maturity, on independent version lines** (they
+  compose the public `mycelium` 2.x API only — *not* the 2.x train): `mycelium-guardrails`
+  **0.1.0 → 1.0.0** (tag `mycelium-guardrails-v1.0.0`) — an **API-stability commitment**; its scope is
+  feature-complete, the remaining limits (promise-strength, eventually-consistent policy, coarse
+  revocation) are **by-design** of a coordinator-free model, not gaps. `mycelium-reason`
+  **0.1.0 → 0.5.0** (tag `mycelium-reason-v0.5.0`) — mature but deliberately **pre-freeze**: real-LLM
+  backend / chunked-blob-past-8-MiB / conversation-memory / run-level-evals still open and may shape
+  the API. No code change; per-crate CHANGELOGs added. **"v3.0" is a work epoch, not a version** — the
+  substrate stays 2.x (ROADMAP v3.0 now says so explicitly).
+- **Distribution is by git tag, not crates.io.** The `mycelium`/`mycelium-core` names on crates.io
+  belong to an **unrelated, dormant 2019 project** (`gitlab.com/matthew.bradford/myceliumdds`, 0.1.1) —
+  they are not this crate, and crates.io has no forced-transfer / abandoned-name reclaim path (only a
+  voluntary owner handoff). So the supported install is git-tag deps (companions resolve the
+  workspace-internal `mycelium` automatically); a `cargo add mycelium` would need the substrate
+  **renamed** to a free name. This also fixed a latent bug: `building-on-mycelium.md` §1 had told
+  adopters `mycelium = "2"`, which resolves against the 2019 crate. Install story:
+  [`building-on-mycelium.md`](../../guide/building-on-mycelium.md) §1.
+
 ## v2.2.0 release — 2026-07-16 (tag `v2.2.0`)
 
 A hardening MINOR since v2.1.0. Wire **v12** (PREV 11) unchanged — a fully backwards-compatible

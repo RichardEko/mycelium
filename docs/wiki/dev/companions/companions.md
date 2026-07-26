@@ -67,6 +67,18 @@ via wasm-host).
   authority — the chokepoint non-goal). Examples `guardrail_wedge`/`guardrail_fleet`, guide chapter 16.
   PRs #137–#139; zero new locks. Plan: `docs/plans/mycelium-guardrails.md`.
 
+> **Versioning & distribution (companions).** The two v3.0 companions ride **independent version
+> lines**, *not* the 2.x substrate train (they compose the public `mycelium` API only):
+> `mycelium-guardrails` **1.0.0** — scope feature-complete, **API frozen** (the remaining limits are
+> by-design of the coordinator-free model, not gaps); `mycelium-reason` **0.5.0** — mature but
+> deliberately **pre-freeze** (real-backend / chunked-blob / conversation-memory / run-level-evals
+> still open). **"v3.0" is the epoch, not a crate version** — the substrate stays 2.x (`ROADMAP.md` →
+> v3.0). The whole workspace is distributed **by git tag, not crates.io** — the `mycelium`/
+> `mycelium-core` crates.io names are held by an unrelated dormant 2019 project, so install is via
+> git-tag deps (a companion dep resolves the workspace-internal `mycelium` automatically): snippets in
+> [`building-on-mycelium.md`](../../../guide/building-on-mycelium.md) §1. See
+> [dev/history](../history.md) → *Companion re-versioning* (2026-07-26).
+
 Both tuple-space and blackboard implement the **exactly-once-effect contract** — the shared
 artifact is the *contract*, not code (`docs/design/exactly-once-effect.md`; a shared overlay
 was examined and declined-with-evidence).
