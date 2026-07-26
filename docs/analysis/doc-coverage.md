@@ -19,6 +19,26 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-26 (run 14)** — diff-gated. **Zero source change** since run 13 (`src/` · `mycelium-*/src/`
+  untouched); the only `docs/` delta is `4ecc1aa` (install-story fix) + `7687242` (wiki lint). **No
+  matrix cell moves — all rows carried.** One **must-work-if-followed** observation recorded — same
+  class as run 13's `key_path` / regenerate-key hits, but on the *most foundational* Dev instruction:
+  `building-on-mycelium.md` §1 had told integrators `mycelium = "2"` / `mycelium-core = "2"`, crates.io
+  **version** deps that resolve against an **unrelated, dormant 2019 project** of the same name
+  (`gitlab.com/matthew.bradford/myceliumdds`, 0.1.1) — so a literal `cargo add` / build pulls the wrong
+  crate or fails. Fixed (already merged, `4ecc1aa`) to **git-tag deps** (`git = "…RichardEko/mycelium",
+  tag = "v2.3.0"`; the two companions on their own tags), which resolve to this repo and carry the
+  workspace-internal `mycelium` automatically — **must-work re-verified** (the three tags exist; the
+  workspace resolves at `mycelium` v2.3.0). The companion re-versioning (guardrails 1.0.0 / reason
+  0.5.0) and the git-tag-not-crates.io distribution constraint also gained a wiki home
+  (`companions.md`, `history.md`, via the 2026-07-26 lint). **Scope note (not a false-Clear — the
+  install line was never a scored concept cell):** the *dependency/install* snippet is the most
+  upstream HOW·Dev step yet sat outside the matrix's concept inventory while silently broken; the
+  presence-is-not-sufficiency spot-check should treat any documented dependency snippet as
+  must-work-if-followed going forward. Considered an *Installation / dependency* row and left it out
+  (onboarding HOW, not a substrate concept) — flagging the spot-check scope instead. Floor unchanged:
+  **0 ✗ cells, 0 Tier-1.**
+
 - **2026-07-24 (run 13)** — diff-gated over the **SOC 2 audit-gap arc** (2026-07-22, on `main`: WS-A…F
   — gateway TLS, audit export/checkpoint, `sys/identity` authentication 1a/1b/2/3, revocation glue,
   crypto-shred erasure). Two moves:
