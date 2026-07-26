@@ -13,13 +13,26 @@ come back here.
 
 ## 1. The dependency
 
+Mycelium is distributed **by git tag, not crates.io** — pin a release tag:
+
 ```toml
 # Full runtime (KV + signals + consensus + capabilities + gateway/MCP/A2A + TLS).
-mycelium = "2"
+mycelium = { git = "https://github.com/RichardEko/mycelium", tag = "v2.3.0" }
 
 # Or the minimal substrate — Layers I+II only, ~⅓ the dep tree, no Axum:
-mycelium-core = "2"
+mycelium-core = { git = "https://github.com/RichardEko/mycelium", tag = "v2.3.0" }
+
+# Companion crates — independent version lines, same repo (a git dep on a
+# companion resolves the workspace-internal `mycelium` automatically):
+mycelium-guardrails = { git = "https://github.com/RichardEko/mycelium", tag = "mycelium-guardrails-v1.0.0" }
+mycelium-reason     = { git = "https://github.com/RichardEko/mycelium", tag = "mycelium-reason-v0.5.0", features = ["llm", "gateway"] }
 ```
+
+> **Why git, not `cargo add mycelium`.** The `mycelium`/`mycelium-core` names on
+> crates.io belong to an unrelated, dormant 2019 project — they are not this crate.
+> Git-tag dependencies bypass the crates.io namespace entirely, so this is the supported
+> install path (consistent with the AGPL / library-not-platform stance). Add features to
+> the `features = […]` array.
 
 Feature choice on the full crate:
 - **`default`** = `cli,gateway,consensus` — most integrators want this.
