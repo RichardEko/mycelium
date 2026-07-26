@@ -2932,6 +2932,15 @@ evolution needing field-level migration.
 
 ## v3.0 — two primaries (one shipped its first tranche) · packaging candidates · one adapter
 
+> **Naming note — "v3.0" is a roadmap _epoch_, not a version.** The released substrate is at
+> **`2.3.0`** (wire v12, additive-only); there is no `3.0.0` crate. "v3.0" labels this *body of
+> work* (the LLM-DX + guardrails companion axis), the way "v2.0 Milestones" named the prior epoch.
+> Its deliverables ship as **independent companion crates, each on its own version line** —
+> `mycelium-guardrails` at **`1.0.0`** (scope feature-complete, API frozen) and `mycelium-reason` at
+> **`0.5.0`** (mature but pre-freeze: real-backend / chunked-blob / memory / evals still open) —
+> depending on the stable `mycelium` 2.x public API. A `3.0.0` *substrate* release would require an
+> actual breaking change (wire or public API) — none has occurred.
+
 **Two primary deliverables** (each its own design sketch, each a substrate-native differentiator) —
 **both ✅ shipped 2026-07-08**: **`mycelium-reason`** (LLM-authoring DX — the crate + Python tier + the
 full LangGraph example ladder, PRs #130–#136) and **`mycelium-guardrails`** (structural, coordinator-free

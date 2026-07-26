@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-guardrails"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "metrics",
  "mycelium",
@@ -2243,7 +2243,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium-reason"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "axum 0.8.9",
  "bytes",
