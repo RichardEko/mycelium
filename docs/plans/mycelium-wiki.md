@@ -4,7 +4,12 @@
 (data plane · curator control plane · reconcile + change-driven lint · MCP tools + HTTP gateway + py/ts
 SDKs · worked example), all CI-green; audited in analysis Run 32 (one Major finding found + fixed —
 `Wiki::shutdown`). Companion page: [`docs/wiki/dev/companions/wiki.md`](../wiki/dev/companions/wiki.md).
-**Open (additive):** the disconnected KV-native variant. (The **access broker** — the curator's
+**Open (additive):** the disconnected KV-native variant — the merge mechanism is settled
+([`wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md) §1–§2), but its **eligibility envelope**
+(E1–E4 + a resident-corpus tripwire, §6) is the precondition a build must satisfy *first*: KV
+full-replication puts the whole corpus on every mesh node, and `Group` is not a KV-partition boundary,
+so the variant only fits a bounded corpus where the group ≈ the replication set. (The **access
+broker** — the curator's
 membership-gated store grant — shipped 2026-07-04: `Wiki::request_store_access` + `Membership` on the
 `CuratorBrain`, `tests/access.rs`.) Design record: 2026-07-02; two driving use cases reviewed 2026-07-03.
 

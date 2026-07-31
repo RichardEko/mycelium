@@ -10,7 +10,7 @@
 > **This record is retained as the *disconnected variant*** — the KV-native section-CRDT merge, for an
 > edge/autonomous fleet with **no external store to point at**. §1–§2 (section addressing + the LWW/
 > curator merge) are that variant's mechanism. **§3 (curator state machine), §4 (identity/access —
-> "competence is a capability, knowledge is not"), and §6 (the curator `lib.rs` surface) carry over to
+> "competence is a capability, knowledge is not"), and §7 (the curator `lib.rs` surface) carry over to
 > the primary architecture unchanged** — they are about *who curates and who may read*, not *where the
 > bytes live*.
 
@@ -19,7 +19,7 @@ This formalises the load-bearing areas
 the sketch flagged: (1) the **section addressing + merge unit** (§1–§2), (2) the **curator role
 state machine** (§3), and (3) the **identity/access mapping** — how a wiki relates to
 Capability / Skill / Group, and the normative "competence is a capability, knowledge is not" rule
-(§4). §6 is a **pre-build `lib.rs` API sketch** of the curator surface (the `WikiRole`/`CuratorState`
+(§4). §7 is a **pre-build `lib.rs` API sketch** of the curator surface (the `WikiRole`/`CuratorState`
 shape). Written *before* the crate exists so the mechanism is settled and reviewable; promotes to the
 crate's `lib.rs` doc + a `v2-…-wiki.md` build plan when the demand trigger fires. Nothing here
 changes core — it is a discipline over the public KV/signal/capability API, the way
@@ -621,7 +621,67 @@ The design's one sentence: **section granularity turns the common case into a lo
 needs no curator, and the curator turns the rare same-section case into a single-writer sequence —
 so the LLM's non-determinism is quarantined at one serialised node and never threatens convergence.**
 
-## 6. API reference sketch — the curator surface as it would appear in `lib.rs`
+## 6. Eligibility & resource discipline — when the disconnected variant is the right tool
+
+§5 states what the variant *buys*; this section states the **cost that buys it**, and the envelope in
+which the trade is favourable. It is the disconnected variant's **admission gate** — the half the
+merge mechanism (§1–§2) does not settle. Skipping it is how a "small group wiki" becomes silent
+fleet-wide memory pressure.
+
+### 6.1 The cost is structural: KV is full-replication
+
+The corpus lives in KV, and **gossip is the only replication mechanism** (`src/lib.rs` crate doc:
+*"there is no quorum acknowledgement"*) — every admitted node converges to the same store
+(`store.rs`, LWW + deterministic byte tiebreak). So a KV-native wiki puts **the entire corpus + its
+`sec/` history + proposal/tombstone churn on every node in the mesh**, in memory and on disk, with
+anti-entropy bandwidth proportional to edit rate. This is not a tuning artefact — it is the same
+property that delivers I1/I3 (every node a full replica ⇒ converges, reads offline, survives any node
+death). The external-store primary architecture exists precisely to keep these O(corpus) bytes *off*
+the nodes (control plane in KV, data plane in the store); the disconnected variant re-accepts that
+cost deliberately, in exchange for needing **no store, no backup target, no infra**.
+
+### 6.2 The crux: a group is not a KV-replication boundary
+
+`Group` is a **signal scope + admission boundary** (`SignalScope::Group`), **not** a KV partition —
+§4.3.2 already establishes this for the classification case ("a capability sub-group inside the shared
+cluster *still gossips to every node*"). It applies in full here: a *group-scoped* wiki stored
+KV-native does **not** replicate to just the group — it replicates to the **whole admitted mesh**,
+member or not. The shipped design scopes the corpus at the access broker over an external store; the
+KV-native variant **has no such lever**. So the only way "who holds the bytes" ≈ "who wants them" is
+to make the **replication set the eligibility unit** — either the group *is* the mesh, or the domain
+runs as a **separate cluster** (§4.3.2's RIGHT case: its own bind/peer set, TLS-gated admission, KV
+that never crosses). Isolation is by mesh, never by key prefix.
+
+### 6.3 The four eligibility conditions (conjunctive — all must hold)
+
+| # | Condition | Why | Disqualifier |
+|---|---|---|---|
+| E1 | **Bounded, small corpus** that fits the *smallest* node's budget | every node stores all of it; per-write is gated (`framing::MAX_KV_WRITE_BYTES`, chunked AE) but the *aggregate* is not | a growing knowledge base — target is KBs–low-MBs of curated reference, not a corpus that trends up |
+| E2 | **Replication set ≈ reader set** — the group *is* the mesh, or runs as its own cluster (§4.3.2) | KV is not group-partitioned (§6.2); otherwise prose floods nodes that never read it | a small group inside a large shared mesh ⇒ pure fan-out waste |
+| E3 | **Low edit rate** — curated reference, not a chatty scratchpad | `sec/` LWW churn + tombstones + AE cost land on every node each round | high-frequency collaboration — that is the blackboard/tuple-space's territory, not this |
+| E4 | **No external store to point at** — the actual trigger | with a store, the primary path dominates on every axis (§5) and keeps bytes off nodes | any deployment that *has* a durable store ⇒ use the shipped architecture |
+
+Fail any one ⇒ the **primary external-store architecture is the correct tool**, not this variant. The
+conjunction matters: a small corpus in a big mixed mesh (E1 ✓, E2 ✗) is still disqualified.
+
+### 6.4 Enforce the envelope, don't just document it
+
+Consistent with the substrate's discipline — **resource-aware eligibility** (the artifact library's
+runtime gate) and **detection-not-prevention via tripwires + counters** (never a Layer-I write guard)
+— a build of this variant must ship the envelope as a *runtime* concern, not a README caveat:
+
+- A configured **per-node byte budget** for the KV-native wiki namespace (E1 made numeric).
+- A **tripwire counter** that fires when the resident corpus crosses it — surfaced on the Ops Console
+  the way the emergent tripwires are — so an operator *sees* the corpus outgrowing the envelope
+  instead of discovering it as fleet-wide memory pressure. It **detects and reports; it does not block
+  the write** (blocking would teach Layer I a higher-layer law — forbidden).
+- The build plan decides the budget default and whether crossing it also degrades the curator's lint
+  loop to *warn-only*. Until then, E1–E4 are the reviewer's gate.
+
+This section, not §1–§2, is what a build plan must satisfy **first**: the merge is proven; the
+eligibility envelope is the precondition for the merge to be worth running at all.
+
+## 7. API reference sketch — the curator surface as it would appear in `lib.rs`
 
 Pre-build draft of the curator-role surface, in the doc-commented idiom the `mycelium-tuple-space`
 (`TupleRole`) and `mycelium-blackboard` (`BoardRole`) crates use in their `lib.rs`. Signatures may
@@ -748,11 +808,11 @@ pub struct WikiConfig {
 //   log. Proposals are *intentionally* ephemeral (evaporating soft-state), so they are the one
 //   thing NOT persisted. This is the same "no crate WAL" stance §3.4 takes for curator failover.
 // • No page-assembly cache knob. Pages assemble from their sections at read time (§1.1); a
-//   cached assembled `page/{path}/rendered` is deferred (§7 open question) — it would be a
+//   cached assembled `page/{path}/rendered` is deferred (§8 open question) — it would be a
 //   curator-written derived effect, so it is not a v1 config surface.
 // • No reconcile-batch knob. Whether the curator batches multiple same-section proposals per
-//   LLM call (§7) is an open build decision, not a pinned default.
-// • No backpressure knob. The optional `sys/wiki/{node}/{group}/…` pressure pheromone (§7) is
+//   LLM call (§8) is an open build decision, not a pinned default.
+// • No backpressure knob. The optional `sys/wiki/{node}/{group}/…` pressure pheromone (§8) is
 //   deferred; `proposal_ttl` is the v1 bound on queue growth.
 // • No LLM/model field. The reconcile uses the *agent's* configured `LlmBackend` (the `llm`
 //   feature); a per-wiki model override is deferred until a real need appears.
@@ -836,7 +896,7 @@ impl Wiki {
 same posture as the tuple space's `TupleRole` + ring observability; a curator is a *recallable
 participant*, so its identity is legible but never authoritative state (§3.4).
 
-## 7. Open questions for the build plan (not decided here)
+## 8. Open questions for the build plan (not decided here)
 
 - **Section-split/merge edits** (an author wants to split one section into two, or fuse two): these
   touch multiple `sec/` keys + `meta.order` atomically-ish. Proposed as a single multi-key proposal
